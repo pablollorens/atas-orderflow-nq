@@ -11,8 +11,9 @@
          C:\Program Files (x86)\ATAS Platform\
        (busca el fichero ATAS.Strategies.dll y usa esa carpeta)
 
-    2) TargetFramework: ATAS v8 corre sobre .NET 8. Si tu versión es más
-       antigua (.NET Framework), cambia 'net8.0-windows' por 'net472'.
+    2) TargetFramework: esta build de ATAS v8 corre sobre .NET 10
+       (ATAS.*.dll referencian System.Runtime 10.0). Requiere el SDK .NET 10.
+       Si tu ATAS fuese más antiguo, ajusta el TFM a la versión que use.
 
     3) El DLL compilado hay que copiarlo a:
          C:\Users\<TU_USUARIO>\Documents\ATAS\Strategies
@@ -22,7 +23,7 @@
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -32,10 +33,16 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 
     <!-- >>> AJUSTA ESTA RUTA <<< -->
-    <AtasPath>$(LocalAppData)\ATAS Platform\current</AtasPath>
+    <AtasPath>C:\Program Files (x86)\ATAS Platform</AtasPath>
 
-    <!-- Carpeta de estrategias de ATAS (para el copiado automático opcional) -->
-    <AtasStrategiesDir>$(USERPROFILE)\Documents\ATAS\Strategies</AtasStrategiesDir>
+    <!-- MSB3277: conflicto transitivo de WindowsBase (4.0 del ref-pack vs 10.0 que
+         arrastran las DLL de ATAS). Inofensivo: las DLL las aporta la plataforma en
+         runtime (Private=false). Lo degradamos a mensaje para un build limpio. -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+
+    <!-- Carpeta de estrategias de ATAS donde se cargan los DLL personalizados.
+         En esta instalación es %APPDATA%\ATAS\Strategies (no Documents\ATAS). -->
+    <AtasStrategiesDir>$(AppData)\ATAS\Strategies</AtasStrategiesDir>
   </PropertyGroup>
 
   <!-- Solo compilamos la versión v2. Las originales de Juan quedan como
@@ -67,11 +74,12 @@
   </ItemGroup>
 
   <!-- Copiado automático del DLL a la carpeta de estrategias de ATAS tras compilar.
-       Descomenta para activarlo (cierra ATAS o pulsa el refresco tras compilar).
+       Tras compilar, en ATAS pulsa el refresco de la lista de estrategias (o reinícialo).
+       Si ATAS tiene el DLL bloqueado, ciérralo antes de compilar. -->
   <Target Name="DeployToAtas" AfterTargets="Build">
+    <MakeDir Directories="$(AtasStrategiesDir)" Condition="!Exists('$(AtasStrategiesDir)')" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(AtasStrategiesDir)" OverwriteReadOnlyFiles="true" />
     <Message Text="Copiado $(TargetFileName) a $(AtasStrategiesDir)" Importance="high" />
   </Target>
-  -->
 
 </Project>

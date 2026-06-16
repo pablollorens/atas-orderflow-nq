@@ -4,6 +4,7 @@ using ATAS.Strategies.Chart;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using Utils.Common.Logging;
 
@@ -116,7 +117,7 @@ namespace OrderFlowNQ
         {
             if (bar == _lastBar) return;
             if (bar < 5) return;
-            if (!CanProcess(bar)) return;          // VERIFY: gate nativo de ATAS
+            if (!CanProcess(bar)) return;          // gate nativo de ATAS (ChartStrategy.CanProcess)
             _lastBar = bar;
 
             var candle = GetCandle(bar);
@@ -288,33 +289,37 @@ namespace OrderFlowNQ
             return c.Close < c.Open && c.Close < prev.Low;
         }
 
-        // ════════════════ ACCESO AL FOOTPRINT (VERIFY contra tu ATAS v8) ════════════════
+        // ════════════════ ACCESO AL FOOTPRINT (API ATAS.Indicators confirmada) ════════════════
         // Devuelve los niveles de precio ordenados de menor a mayor.
         private IEnumerable<PriceVolumeInfo> OrderedLevels(IndicatorCandle c)
         {
-            var levels = c.GetAllPriceLevels();           // VERIFY: nombre del método
+            var levels = c.GetAllPriceLevels();           // IEnumerable<PriceVolumeInfo>
             if (levels == null) yield break;
             foreach (var lvl in levels.OrderBy(l => l.Price))
                 yield return lvl;
         }
 
-        private PriceVolumeInfo MaxVolumeLevel(IndicatorCandle c)
+        private PriceVolumeInfo? MaxVolumeLevel(IndicatorCandle c)
         {
-            try { return c.MaxVolumePriceInfo; }          // VERIFY
+            try { return c.MaxVolumePriceInfo; }          // PriceVolumeInfo del nivel de mayor volumen
             catch { return null; }
         }
 
         private decimal LevelVolume(PriceVolumeInfo lvl)
         {
-            // VERIFY: en algunas versiones es .Volume; bid/ask por separado en .Bid / .Ask
+            // PriceVolumeInfo.Volume = volumen total del nivel (bid+ask en .Bid / .Ask)
             return lvl.Volume;
         }
+
+        // Tamaño de tick del instrumento. IndicatorCandle no expone Security;
+        // el tick viene de InstrumentInfo (ATAS.Indicators.IInstrumentInfo.TickSize).
+        private decimal Tick => InstrumentInfo?.TickSize ?? 0m;
 
         // Imbalance diagonal comprador: ask de este nivel vs bid del nivel inmediatamente inferior.
         private bool IsBuyImbalance(IndicatorCandle c, PriceVolumeInfo lvl)
         {
-            var below = LevelAt(c, lvl.Price - c.Security?.TickSize ?? lvl.Price);
-            decimal bid = below?.Bid ?? 0m;               // VERIFY .Bid / .Ask
+            var below = LevelAt(c, lvl.Price - Tick);
+            decimal bid = below?.Bid ?? 0m;
             decimal ask = lvl.Ask;
             if (bid <= 0) return ask > 0;
             return ask >= bid * ImbalanceRatio;
@@ -322,16 +327,16 @@ namespace OrderFlowNQ
 
         private bool IsSellImbalance(IndicatorCandle c, PriceVolumeInfo lvl)
         {
-            var above = LevelAt(c, lvl.Price + (c.Security?.TickSize ?? 0m));
+            var above = LevelAt(c, lvl.Price + Tick);
             decimal ask = above?.Ask ?? 0m;
             decimal bid = lvl.Bid;
             if (ask <= 0) return bid > 0;
             return bid >= ask * ImbalanceRatio;
         }
 
-        private PriceVolumeInfo LevelAt(IndicatorCandle c, decimal price)
+        private PriceVolumeInfo? LevelAt(IndicatorCandle c, decimal price)
         {
-            try { return c.GetPriceVolumeInfo(price); }   // VERIFY
+            try { return c.GetPriceVolumeInfo(price); }
             catch { return null; }
         }
 
