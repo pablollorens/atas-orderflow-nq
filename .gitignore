@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.userprefs
+
+# ATAS local DLLs — nunca subir las DLL de la plataforma al repo
+*.dll
+
+# OS
+Thumbs.db
+.DS_Store

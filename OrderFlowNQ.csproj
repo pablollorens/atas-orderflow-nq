@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ════════════════════════════════════════════════════════════════════════
+    OrderFlowNQ — ATAS Chart Strategy
+    ════════════════════════════════════════════════════════════════════════
+
+    1) Ajusta AtasPath abajo a la carpeta donde están las DLL de TU instalación
+       de ATAS. Suele ser una de estas:
+         %LOCALAPPDATA%\ATAS Platform\current\
+         C:\Program Files (x86)\ATAS Platform\
+       (busca el fichero ATAS.Strategies.dll y usa esa carpeta)
+
+    2) TargetFramework: ATAS v8 corre sobre .NET 8. Si tu versión es más
+       antigua (.NET Framework), cambia 'net8.0-windows' por 'net472'.
+
+    3) El DLL compilado hay que copiarlo a:
+         C:\Users\<TU_USUARIO>\Documents\ATAS\Strategies
+       El bloque <Target Name="DeployToAtas"> de abajo lo hace solo tras compilar
+       (descomenta y ajusta la ruta si quieres el copiado automático).
+    ════════════════════════════════════════════════════════════════════════
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>OrderFlowNQ</AssemblyName>
+    <RootNamespace>OrderFlowNQ</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!-- >>> AJUSTA ESTA RUTA <<< -->
+    <AtasPath>$(LocalAppData)\ATAS Platform\current</AtasPath>
+
+    <!-- Carpeta de estrategias de ATAS (para el copiado automático opcional) -->
+    <AtasStrategiesDir>$(USERPROFILE)\Documents\ATAS\Strategies</AtasStrategiesDir>
+  </PropertyGroup>
+
+  <!-- Solo compilamos la versión v2. Las originales de Juan quedan como
+       referencia de lectura y se excluyen del build (declaran la misma clase). -->
+  <ItemGroup>
+    <Compile Remove="reference/**/*.cs" />
+    <None Include="reference/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Referencias a las DLL de ATAS. CopyLocal=false: no se empaquetan,
+       las aporta la plataforma en tiempo de ejecución. -->
+  <ItemGroup>
+    <Reference Include="ATAS.Strategies">
+      <HintPath>$(AtasPath)\ATAS.Strategies.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ATAS.Indicators">
+      <HintPath>$(AtasPath)\ATAS.Indicators.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ATAS.DataFeedsCore">
+      <HintPath>$(AtasPath)\ATAS.DataFeedsCore.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Utils.Common">
+      <HintPath>$(AtasPath)\Utils.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Copiado automático del DLL a la carpeta de estrategias de ATAS tras compilar.
+       Descomenta para activarlo (cierra ATAS o pulsa el refresco tras compilar).
+  <Target Name="DeployToAtas" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(AtasStrategiesDir)" OverwriteReadOnlyFiles="true" />
+    <Message Text="Copiado $(TargetFileName) a $(AtasStrategiesDir)" Importance="high" />
+  </Target>
+  -->
+
+</Project>
