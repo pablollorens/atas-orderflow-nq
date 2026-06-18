@@ -1,203 +1,209 @@
+**English** · [Español](README.es.md)
+
 # atas-orderflow-nq
 
-Estrategia algorítmica de **order flow** para **ATAS v8** (C#, `ChartStrategy`),
-basada en el gatillo **A+**: *Absorción → Stacked Imbalance en zona extrema →
-Confirmación de precio*. Pensada para futuros índice intradía (MNQ / MES / NQ).
+Algorithmic **order flow** strategy for **ATAS v8** (C#, `ChartStrategy`), built
+around the **A+** trigger: *Absorption → Stacked Imbalance in an extreme zone →
+Price confirmation*. Designed for intraday index futures (MNQ / MES / NQ).
 
 ---
 
-## Tabla de contenidos
-- [Qué es](#qué-es)
-- [La estrategia: Setup A+](#la-estrategia-setup-a)
-- [Por qué la versión original no generaba órdenes](#por-qué-la-versión-original-no-generaba-órdenes)
-- [Estructura del repositorio](#estructura-del-repositorio)
-- [Requisitos](#requisitos)
-- [Compilar (Windows + Zed)](#compilar-windows--zed)
-- [Desplegar en ATAS](#desplegar-en-atas)
-- [Testear en Market Replay](#testear-en-market-replay)
-- [Parámetros](#parámetros)
-- [Pendiente / roadmap](#pendiente--roadmap)
-- [Créditos](#créditos)
+## Table of contents
+- [What it is](#what-it-is)
+- [The strategy: A+ setup](#the-strategy-a-setup)
+- [Why the original version produced no orders](#why-the-original-version-produced-no-orders)
+- [Repository layout](#repository-layout)
+- [Requirements](#requirements)
+- [Build (Windows + Zed)](#build-windows--zed)
+- [Deploy to ATAS](#deploy-to-atas)
+- [Test in Market Replay](#test-in-market-replay)
+- [Parameters](#parameters)
+- [Roadmap / TODO](#roadmap--todo)
+- [Credits](#credits)
 
 ---
 
-## Qué es
+## What it is
 
-ATAS permite escribir estrategias en C# heredando de `ChartStrategy`. El método
-`OnCalculate(int bar, decimal value)` se ejecuta en cada barra histórica y luego
-en cada tick de la barra en curso; dentro decides y envías órdenes con `OpenOrder`.
+ATAS lets you write C# strategies by inheriting from `ChartStrategy`. The method
+`OnCalculate(int bar, decimal value)` runs on every historical bar and then on
+every tick of the current bar; inside it you make decisions and send orders with
+`OpenOrder`.
 
-Este repo contiene una estrategia que automatiza el patrón de order flow A+ y deja
-toda la lógica parametrizada para poder optimizarla después.
+This repo contains a strategy that automates the A+ order flow pattern and keeps
+the whole logic parameterized so it can be optimized later.
 
-## La estrategia: Setup A+
+## The strategy: A+ setup
 
-El gatillo, sobre tres velas:
-
-```
-Vela N-2:  Aparece ABSORCIÓN (un participante grande absorbe el lado contrario)
-Vela N-1:  STACKED IMBALANCE en zona extrema de la vela
-             · LONG  -> imbalance comprador en el 30% inferior
-             · SHORT -> imbalance vendedor en el 30% superior
-           (la vela no hace nuevo extremo contra N-2)
-Vela N:    CONFIRMACIÓN de precio
-             · LONG  -> cierra por encima del máximo de N-1
-             · SHORT -> cierra por debajo del mínimo de N-1
-           -> ENTRADA al cierre de N
-```
-
-**Gestión:** stop a `StopPoints`, take profit a `StopPoints × TargetRR`, break-even
-a `BeTriggerR` (mueve el stop a entrada + `BeOffsetPoints`), cierre forzado a
-`ForceCloseR`. Cortacircuitos diarios por nº de trades y por pérdida en USD.
-
-La regla de la zona del 30% se calcula así:
+The trigger, over three candles:
 
 ```
-rango        = High - Low
-posRelativa  = (precioImbalance - Low) / rango
-posRelativa <= 0.30  -> zona inferior (señal alcista)
-posRelativa >= 0.70  -> zona superior (señal bajista)
+Candle N-2:  ABSORPTION appears (a large participant absorbs the opposite side)
+Candle N-1:  STACKED IMBALANCE in the candle's extreme zone
+               · LONG  -> buy imbalance in the bottom 30%
+               · SHORT -> sell imbalance in the top 30%
+             (the candle makes no new extreme against N-2)
+Candle N:    Price CONFIRMATION
+               · LONG  -> closes above the high of N-1
+               · SHORT -> closes below the low of N-1
+             -> ENTRY at the close of N
 ```
 
-## Por qué la versión original no generaba órdenes
+**Management:** stop at `StopPoints`, take profit at `StopPoints × TargetRR`,
+break-even at `BeTriggerR` (moves the stop to entry + `BeOffsetPoints`), forced
+close at `ForceCloseR`. Daily circuit breakers by number of trades and by USD loss.
 
-La versión inicial instanciaba los indicadores `StackedImbalance` / `Absorption`,
-hacía `Add()` y leía sus valores con `DataSeries[0..3]` casteado a `ValueDataSeries`.
+The 30% zone rule is computed like this:
 
-El problema: esos indicadores de order flow son **de renderizado** — su lógica vive
-en `OnRender` y no exponen la señal en una serie numérica. La lectura devolvía 0,
-todas las señales quedaban en `false` y nunca se evaluaba ningún setup -> **cero
-órdenes**. Para colmo, un `catch { return 0; }` se tragaba cualquier excepción, así
-que ni siquiera había error visible. Faltaba además implementar `OnOrderRegisterFailed`,
-con lo que cualquier orden rechazada por el exchange pasaba desapercibida.
+```
+range       = High - Low
+relativePos = (imbalancePrice - Low) / range
+relativePos <= 0.30  -> lower zone (bullish signal)
+relativePos >= 0.70  -> upper zone (bearish signal)
+```
 
-**Solución (versión v2):** las señales se calculan **directamente del footprint de
-la vela** (`GetAllPriceLevels`, `MaxVolumePriceInfo`, volumen bid/ask por nivel de
-precio) en vez de leer otros indicadores. Además:
+## Why the original version produced no orders
 
-- Se implementa la regla del 30%.
-- Se actualiza el PnL diario en cada cierre (antes nunca se sumaba).
-- Se implementa `OnOrderRegisterFailed` (los fallos ahora se loguean).
-- `DebugMode` vuelca contadores diarios para ver dónde se rompe la cadena.
+The initial version instantiated the `StackedImbalance` / `Absorption` indicators,
+called `Add()` and read their values via `DataSeries[0..3]` cast to `ValueDataSeries`.
 
-> ⚠️ **Verificación pendiente.** Las llamadas al footprint marcadas con `// VERIFY`
-> (`GetAllPriceLevels`, `GetPriceVolumeInfo`, `MaxVolumePriceInfo`, y las propiedades
-> `.Bid / .Ask / .Volume / .Price` de `PriceVolumeInfo`) pueden cambiar de nombre
-> entre versiones de la API. Con `DebugMode = true`, la primera corrida en Replay
-> te confirma si los valores llegan (si los contadores se mueven, los nombres son correctos).
+The problem: those order flow indicators are **render-only** — their logic lives in
+`OnRender` and they don't expose the signal as a numeric series. The read returned 0,
+every signal stayed `false`, and no setup was ever evaluated -> **zero orders**. On
+top of that, a `catch { return 0; }` swallowed any exception, so there wasn't even a
+visible error. It was also missing an `OnOrderRegisterFailed` implementation, so any
+order rejected by the exchange went unnoticed.
 
-## Estructura del repositorio
+**Fix (v2):** signals are computed **directly from the candle's footprint**
+(`GetAllPriceLevels`, `MaxVolumePriceInfo`, bid/ask volume per price level) instead
+of reading other indicators. In addition:
+
+- The 30% rule is implemented.
+- Daily PnL is updated on every close (it was never summed before).
+- `OnOrderRegisterFailed` is implemented (failures are now logged).
+- `DebugMode` dumps daily counters to see where the chain breaks.
+
+> ⚠️ **Pending verification.** The footprint calls marked with `// VERIFY`
+> (`GetAllPriceLevels`, `GetPriceVolumeInfo`, `MaxVolumePriceInfo`, and the
+> `.Bid / .Ask / .Volume / .Price` properties of `PriceVolumeInfo`) may be renamed
+> across API versions. With `DebugMode = true`, the first Replay run confirms whether
+> the values arrive (if the counters move, the names are correct).
+
+## Repository layout
 
 ```
 atas-orderflow-nq/
-├── OrderFlowNQ.csproj          Proyecto .NET 8, referencias a las DLL de ATAS
-├── README.md
-├── .gitignore                  Excluye bin/obj y las DLL de la plataforma
+├── OrderFlowNQ.csproj          .NET 8 project, references the ATAS DLLs
+├── README.md                   Default README (English)
+├── README.es.md                Spanish version
+├── .gitignore                  Excludes bin/obj and the platform DLLs
 ├── src/
-│   └── OrderFlowNQ_v2_APlus.cs  Versión activa — la única que se compila
-└── reference/                  Código original (NO se compila, solo lectura)
-    ├── OrderFlowNQ_v1_Jun9.cs   Versión simplificada
-    └── OrderFlowNQ_Jun8_full.cs Versión completa (4 setups) — cantera de ideas
+│   └── OrderFlowNQ_v2_APlus.cs  Active version — the only one that compiles
+└── reference/                  Original code (NOT compiled, read-only)
+    ├── OrderFlowNQ_v1_Jun9.cs   Simplified version
+    └── OrderFlowNQ_Jun8_full.cs Full version (4 setups) — quarry of ideas
 ```
 
-Las dos versiones de `reference/` declaran la misma clase `OrderFlowNQ`, por eso se
-excluyen del build (`<Compile Remove="reference/**/*.cs" />`). Quedan como histórico
-y como fuente de los setups extra (retest, falsa ruptura, continuación).
+Both versions under `reference/` declare the same `OrderFlowNQ` class, which is why
+they're excluded from the build (`<Compile Remove="reference/**/*.cs" />`). They stay
+as history and as the source of the extra setups (retest, false breakout, continuation).
 
-## Requisitos
+## Requirements
 
-- **Windows** (ATAS es solo-Windows; no uses WSL para esto).
-- **ATAS v8** instalado y con sesión iniciada.
+- **Windows** (ATAS is Windows-only; don't use WSL for this).
+- **ATAS v8** installed and signed in.
 - **.NET 8 SDK** — https://dotnet.microsoft.com/download
-- Editor: **Zed** (o Visual Studio / Rider si quieres depurar paso a paso).
+- Editor: **Zed** (or Visual Studio / Rider if you want step-by-step debugging).
 
-## Compilar (Windows + Zed)
+## Build (Windows + Zed)
 
-Zed edita y da autocompletado de C# por LSP, pero no compila .NET por sí mismo:
-el build se hace desde la terminal.
+Zed edits and gives C# autocompletion via LSP, but it doesn't build .NET by itself:
+the build is done from the terminal.
 
-1. Abre la carpeta del repo en Zed.
-2. **Ajusta `<AtasPath>`** en `OrderFlowNQ.csproj` a la carpeta donde esté
-   `ATAS.Strategies.dll` (busca ese fichero en tu instalación; suele estar en
-   `%LOCALAPPDATA%\ATAS Platform\current`). Es el único cambio obligatorio.
-   Si tu ATAS fuese antiguo (.NET Framework), cambia `net8.0-windows` por `net472`.
-3. En la terminal integrada de Zed:
+1. Open the repo folder in Zed.
+2. **Set `<AtasPath>`** in `OrderFlowNQ.csproj` to the folder containing
+   `ATAS.Strategies.dll` (look for that file in your installation; it's usually under
+   `%LOCALAPPDATA%\ATAS Platform\current`). This is the only mandatory change.
+   If your ATAS is old (.NET Framework), change `net8.0-windows` to `net472`.
+3. In Zed's integrated terminal:
 
    ```powershell
    dotnet build -c Release
    ```
 
-   Genera `bin/Release/OrderFlowNQ.dll`.
+   This produces `bin/Release/OrderFlowNQ.dll`.
 
-## Desplegar en ATAS
+## Deploy to ATAS
 
-1. Copia `bin/Release/OrderFlowNQ.dll` a
-   `C:\Users\<TU_USUARIO>\Documents\ATAS\Strategies`
-   (o descomenta el `Target DeployToAtas` del `.csproj` para que lo copie solo al compilar).
-2. En ATAS, pulsa el botón de **refresco** de la lista de estrategias.
-3. La estrategia aparece como **`OrderFlowNQ_v2_APlus`**.
+1. Copy `bin/Release/OrderFlowNQ.dll` to
+   `C:\Users\<YOUR_USER>\Documents\ATAS\Strategies`
+   (or uncomment the `DeployToAtas` target in the `.csproj` so it's copied
+   automatically on build).
+2. In ATAS, click the **refresh** button on the strategy list.
+3. The strategy shows up as **`OrderFlowNQ_v2_APlus`**.
 
-## Testear en Market Replay
+## Test in Market Replay
 
-ATAS **no tiene backtester histórico de ticks**: la simulación realista se hace en
-**Market Replay** (datos de tick + DOM desde la nube). Para una estrategia de order
-flow es el único camino válido, porque las señales necesitan footprint real.
+ATAS **has no historical tick backtester**: realistic simulation is done in
+**Market Replay** (tick + DOM data from the cloud). For an order flow strategy it's
+the only valid path, because the signals need real footprint.
 
-1. Inicia sesión en ATAS con tu usuario/contraseña.
-2. Activa **Market Replay** -> modo *Ticks + Generated DOM* (hasta 1 semana) o
-   *Ticks + DOM* (1 día, máxima precisión). Fija las fechas y pulsa Play.
-3. Abre una **Replay Account** — es el `Portfolio` donde se ejecutan las órdenes
-   simuladas. Sin ella, `OpenOrder` no va a ningún sitio.
-4. Abre un chart **footprint / cluster** del instrumento (p. ej. MNQ).
-5. Añade la estrategia desde *Chart Strategies*, con `DebugMode = true`.
-6. Pulsa Play y abre la ventana **Logs**. Lee el volcado diario `[OFNQ][DAY ...]`:
-   - `signals > 0` y trades en el chart -> la cadena funciona.
-   - `absBull/absBear` se mueven pero `siBull/siBear = 0` -> ajusta `ImbalanceRatio` / `MinStackedLevels`.
-   - todo en 0 -> revisa los nombres `// VERIFY` del footprint.
-7. Revisa el **Trading Journal** (Account = Replay): profit factor, drawdown, etc.
-   Solo hay una cuenta Replay y cada sesión resetea la anterior -> exporta lo que quieras conservar.
+1. Sign in to ATAS with your username/password.
+2. Enable **Market Replay** -> *Ticks + Generated DOM* mode (up to 1 week) or
+   *Ticks + DOM* (1 day, maximum precision). Set the dates and press Play.
+3. Open a **Replay Account** — it's the `Portfolio` where simulated orders are
+   executed. Without it, `OpenOrder` goes nowhere.
+4. Open a **footprint / cluster** chart of the instrument (e.g. MNQ).
+5. Add the strategy from *Chart Strategies*, with `DebugMode = true`.
+6. Press Play and open the **Logs** window. Read the daily dump `[OFNQ][DAY ...]`:
+   - `signals > 0` and trades on the chart -> the chain works.
+   - `absBull/absBear` move but `siBull/siBear = 0` -> tune `ImbalanceRatio` / `MinStackedLevels`.
+   - everything at 0 -> review the `// VERIFY` footprint names.
+7. Check the **Trading Journal** (Account = Replay): profit factor, drawdown, etc.
+   There's only one Replay account and each session resets the previous one -> export
+   whatever you want to keep.
 
-> El Replay corre en tiempo real (no hay salto de sesión/vela), así que iterar semanas
-> es lento. Empieza por días concretos de alta actividad y sube la velocidad de playback.
+> Replay runs in real time (no session/candle skipping), so iterating over weeks is
+> slow. Start with specific high-activity days and crank up the playback speed.
 
-## Parámetros
+## Parameters
 
-**Signal** (los que más moverás al optimizar)
+**Signal** (the ones you'll tweak most when optimizing)
 
-| Parámetro | Default | Qué hace |
+| Parameter | Default | What it does |
 |---|---|---|
-| `ZonePct` | 0.30 | Zona extrema de la vela para validar el SI |
-| `ImbalanceRatio` | 3.0 | Ratio ask/bid diagonal para contar imbalance |
-| `MinStackedLevels` | 3 | Nº de niveles consecutivos en imbalance |
-| `AbsorptionVolMin` | 200 | Volumen mínimo en el nivel clave para absorción |
-| `AbsorptionLookback` | 3 | Velas que sigue vigente una absorción |
-| `RequireAbsorption` | true | Exigir absorción previa para el A+ |
-| `EnableSiDouble` | false | Activar el setup secundario (doble SI) |
+| `ZonePct` | 0.30 | Candle's extreme zone to validate the SI |
+| `ImbalanceRatio` | 3.0 | Diagonal ask/bid ratio to count an imbalance |
+| `MinStackedLevels` | 3 | Number of consecutive imbalanced levels |
+| `AbsorptionVolMin` | 200 | Minimum volume at the key level for absorption |
+| `AbsorptionLookback` | 3 | Candles an absorption stays valid |
+| `RequireAbsorption` | true | Require prior absorption for the A+ |
+| `EnableSiDouble` | false | Enable the secondary setup (double SI) |
 
 **Risk**
 
-| Parámetro | Default | Qué hace |
+| Parameter | Default | What it does |
 |---|---|---|
-| `Quantity` | 1 | Contratos por entrada |
-| `StopPoints` | 3.0 | Stop en puntos |
-| `TargetRR` | 2.0 | Ratio riesgo/beneficio del TP |
-| `BeTriggerR` | 1.0 | R a la que se activa break-even |
-| `BeOffsetPoints` | 0.1 | Offset del stop al pasar a BE |
-| `ForceCloseR` | 3.0 | Cierre forzado a esta R |
+| `Quantity` | 1 | Contracts per entry |
+| `StopPoints` | 3.0 | Stop in points |
+| `TargetRR` | 2.0 | Risk/reward ratio of the TP |
+| `BeTriggerR` | 1.0 | R at which break-even activates |
+| `BeOffsetPoints` | 0.1 | Stop offset when moving to BE |
+| `ForceCloseR` | 3.0 | Forced close at this R |
 | `DollarsPerPoint` | 2.0 | MNQ=2, MES=5, NQ=20 |
-| `MaxTrades` | 20 | Máx operaciones/día |
-| `MaxDailyLoss` | 5000 | Pérdida máx diaria (USD) |
+| `MaxTrades` | 20 | Max trades/day |
+| `MaxDailyLoss` | 5000 | Max daily loss (USD) |
 
 **Session**: `UseSessionFilter`, `SessionStartHour`, `SessionEndHour`, `DebugMode`.
 
-## Pendiente / roadmap
+## Roadmap / TODO
 
-- [ ] Cerrar los `// VERIFY` del footprint contra la versión exacta de ATAS.
-- [ ] Portar los setups 2-4 (retest, falsa ruptura, continuación) desde la versión completa.
-- [ ] Confirmar la zona horaria de `candle.Time` para el filtro de sesión.
-- [ ] Validar la gestión de posición contra fills reales (vs el stop sintético por cierre).
+- [ ] Close the footprint `// VERIFY` calls against the exact ATAS version.
+- [ ] Port setups 2-4 (retest, false breakout, continuation) from the full version.
+- [ ] Confirm the time zone of `candle.Time` for the session filter.
+- [ ] Validate position management against real fills (vs the synthetic close-based stop).
 
-## Créditos
+## Credits
 
-Especificación y código base originales de Juan (`juansanca1992`). Reescritura de la
-capa de señal, parametrización y herramientas de diagnóstico en la versión v2.
+Original spec and base code by Juan (`juansanca1992`). Signal-layer rewrite,
+parameterization, and diagnostic tooling in v2.
